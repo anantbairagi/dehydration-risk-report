@@ -571,360 +571,178 @@ st.markdown("---")
 
 st.header("4. How This Analysis Works")
 
-st.markdown("""
-This section walks through every step of the analysis — from raw data to risk classification —
-so you can verify the methodology yourself.
+st.markdown("Expand each step below to see the details.")
+
+with st.expander("Step 1 — Data Source: MDS 3.0 assessments from CMS-mandated nursing home evaluations"):
+    st.markdown("""
+**What:** MDS 3.0 (Minimum Data Set) assessments from CMS-mandated standardized nursing home evaluations.
+
+**Where:** Extracted from the facility management database (PostgreSQL). Each assessment contains hundreds
+of coded clinical items stored as structured JSON.
+
+**De-identification:** All patient and facility identifiers are replaced with surrogate IDs before analysis.
+No PHI leaves the source environment.
 """)
 
-# --- Step-by-step pipeline ---
+with st.expander(f"Step 2 — Filtering: Jan 2022+, OBRA assessments only → {n_assess:,} assessments across {n_fac} facilities"):
+    st.markdown(f"""
+**Date filter:** Only assessments from **January 2022 onward** (assessment reference date A2300 >= 2022-01-01).
 
-st.markdown("""
-<div style="background:#f8f9fa; border-radius:8px; padding:1.2rem 1.5rem; border-left:4px solid #3498DB; margin-bottom:1rem;">
-<h3 style="margin-top:0; color:#2C3E50;">Step 1 — Data Source</h3>
-<b>What:</b> MDS 3.0 (Minimum Data Set) assessments from CMS-mandated standardized nursing home evaluations.<br>
-<b>Where:</b> Extracted from the facility management database (PostgreSQL). Each assessment contains hundreds
-of coded clinical items stored as structured JSON.<br>
-<b>De-identification:</b> All patient and facility identifiers are replaced with surrogate IDs before analysis.
-No PHI leaves the source environment.
-</div>
-""", unsafe_allow_html=True)
+**Assessment type filter:** Only OBRA assessment types are scored:
+- **01** = Admission
+- **02** = Quarterly
+- **03** = Annual
+- **04** = Significant Change
 
-st.markdown(f"""
-<div style="background:#f8f9fa; border-radius:8px; padding:1.2rem 1.5rem; border-left:4px solid #3498DB; margin-bottom:1rem;">
-<h3 style="margin-top:0; color:#2C3E50;">Step 2 — Filtering</h3>
-<b>Date filter:</b> Only assessments from <b>January 2022 onward</b> are included
-(assessment reference date A2300 ≥ 2022-01-01).<br>
-<b>Assessment type filter:</b> Only OBRA assessment types are scored:<br>
-&nbsp;&nbsp;&nbsp;&nbsp;• <b>01</b> = Admission &nbsp;&nbsp; • <b>02</b> = Quarterly &nbsp;&nbsp;
-• <b>03</b> = Annual &nbsp;&nbsp; • <b>04</b> = Significant Change<br>
-<b>Excluded:</b> Entry/discharge tracking records (non-clinical snapshots).<br>
-<b>Result:</b> {n_assess:,} scoreable assessments across {n_fac} facilities.
-</div>
-""", unsafe_allow_html=True)
+**Excluded:** Entry/discharge tracking records (non-clinical snapshots).
 
-st.markdown(f"""
-<div style="background:#f8f9fa; border-radius:8px; padding:1.2rem 1.5rem; border-left:4px solid #3498DB; margin-bottom:1rem;">
-<h3 style="margin-top:0; color:#2C3E50;">Step 3 — MDS Version Handling</h3>
-Each assessment carries an <b>Item Set Version</b> (field ITM_SET_VRSN_CD) that tells us which
-version of MDS coding was used. Our data spans versions <b>{', '.join(str(v) for v in versions)}</b>.<br><br>
-<b>Why this matters:</b> CMS periodically changes which MDS item codes map to which clinical concepts.
-For example:<br>
-&nbsp;&nbsp;&nbsp;&nbsp;• <b>Eating ADL</b> moved from Section G (G0110H1) to Section GG (GG0130A1) around v1.18<br>
-&nbsp;&nbsp;&nbsp;&nbsp;• <b>Diuretics</b> moved from N0400A to N0415G1 in newer versions<br>
-&nbsp;&nbsp;&nbsp;&nbsp;• <b>Renal Insufficiency</b> is I1500 (not I1550, which became neurogenic bladder)<br><br>
-<b>How we handle it:</b> Where codes shifted, we <b>coalesce old + new fields</b> — if either is present,
+**Result:** {n_assess:,} scoreable assessments across {n_fac} facilities.
+""")
+
+with st.expander(f"Step 3 — MDS Version Handling: coalescing old + new item codes across versions {', '.join(str(v) for v in versions)}"):
+    st.markdown(f"""
+Each assessment carries an **Item Set Version** (ITM_SET_VRSN_CD) that tells us which version of MDS
+coding was used. Our data spans versions **{', '.join(str(v) for v in versions)}**.
+
+**Why this matters:** CMS periodically changes which MDS item codes map to which clinical concepts:
+- **Eating ADL** moved from Section G (G0110H1) to Section GG (GG0130A1) around v1.18
+- **Diuretics** moved from N0400A to N0415G1 in newer versions
+- **Renal Insufficiency** is I1500 (not I1550, which became neurogenic bladder)
+
+**How we handle it:** Where codes shifted, we **coalesce old + new fields** — if either is present,
 the factor fires. This ensures no assessments are missed due to version transitions.
-</div>
-""", unsafe_allow_html=True)
+""")
 
-st.markdown("""
-<div style="background:#FFF3CD; border-radius:8px; padding:1.2rem 1.5rem; border-left:4px solid #F39C12; margin-bottom:1rem;">
-<h3 style="margin-top:0; color:#2C3E50;">Step 4 — Scoring Each Assessment</h3>
-For <b>each individual assessment</b>, the algorithm checks 33 clinical risk factors from the MDS data.
-Each factor is a simple yes/no check against specific MDS item codes. If the condition is met,
-points are added to the assessment's total score:<br><br>
-&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:#E74C3C;font-weight:700;">● 3 points</span> — Severe / acute risk factors
-(e.g., comatose, fever, vomiting, already dehydrated, hospice, IV fluids, CAA dehydration trigger)<br>
-&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:#F39C12;font-weight:700;">● 2 points</span> — Moderate / chronic risk factors
-(e.g., diabetes, CHF, renal failure, malnutrition, diuretics, delirium, feeding tube, weight loss)<br>
-&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:#2ECC71;font-weight:700;">● 1 point</span> — Contributing risk factors
-(e.g., female sex, depression, pneumonia, stroke, dental problems, incontinence, pressure ulcers)<br><br>
-<b>Special case — Cognitive Impairment:</b> Uses the RAI Manual's skip pattern. BIMS score (C0500) is checked first.
-If BIMS is unavailable (score = 99 or blank), Staff Assessment of cognition (C1000) is used instead.
-Severe impairment = 3 pts, moderate = 2 pts.<br><br>
-<b>The total score is the sum of all points that fired.</b> Possible range: 0 to 35+.
-</div>
-""", unsafe_allow_html=True)
-
-st.markdown("""
-<div style="background:#f8f9fa; border-radius:8px; padding:1.2rem 1.5rem; border-left:4px solid #8E44AD; margin-bottom:1rem;">
-<h3 style="margin-top:0; color:#2C3E50;">Step 5 — Risk Tier Classification</h3>
-After scoring, each assessment is classified into a risk tier:<br><br>
-<table style="width:100%; border-collapse:collapse; font-size:0.95rem;">
-<tr style="background:#2C3E50; color:white;">
-  <th style="padding:8px; text-align:left;">Rule</th>
-  <th style="padding:8px; text-align:left;">Tier</th>
-  <th style="padding:8px; text-align:left;">Clinical Action</th>
-</tr>
-<tr style="background:#F0FDF4;">
-  <td style="padding:8px; border-bottom:1px solid #e0e0e0;"><b>Score 0–5</b></td>
-  <td style="padding:8px; border-bottom:1px solid #e0e0e0;"><span style="color:#2ECC71;font-weight:700;">Low Risk</span></td>
-  <td style="padding:8px; border-bottom:1px solid #e0e0e0;">Standard hydration monitoring</td>
-</tr>
-<tr>
-  <td style="padding:8px; border-bottom:1px solid #e0e0e0;"><b>Score 6–10</b></td>
-  <td style="padding:8px; border-bottom:1px solid #e0e0e0;"><span style="color:#F39C12;font-weight:700;">Moderate Risk</span></td>
-  <td style="padding:8px; border-bottom:1px solid #e0e0e0;">Enhanced monitoring, proactive fluid offering</td>
-</tr>
-<tr style="background:#FDF2F2;">
-  <td style="padding:8px; border-bottom:1px solid #e0e0e0;"><b>Score 11+</b></td>
-  <td style="padding:8px; border-bottom:1px solid #e0e0e0;"><span style="color:#E74C3C;font-weight:700;">High Risk</span></td>
-  <td style="padding:8px; border-bottom:1px solid #e0e0e0;">Aggressive hydration protocol</td>
-</tr>
-<tr style="background:#F5EEF8;">
-  <td style="padding:8px;"><b>J1550C = 1</b> (overrides score)</td>
-  <td style="padding:8px;"><span style="color:#8E44AD;font-weight:700;">Already Dehydrated</span></td>
-  <td style="padding:8px;">Immediate intervention required</td>
-</tr>
-</table><br>
-<b>Key:</b> J1550C is the MDS item for "Signs and Symptoms of Dehydration" — if checked, the patient
-has 2+ clinical dehydration indicators per the RAI Manual. This <b>overrides</b> the point-based tier
-because the patient is already experiencing dehydration regardless of their risk score.
-</div>
-""", unsafe_allow_html=True)
-
-st.markdown(f"""
-<div style="background:#f8f9fa; border-radius:8px; padding:1.2rem 1.5rem; border-left:4px solid #3498DB; margin-bottom:1rem;">
-<h3 style="margin-top:0; color:#2C3E50;">Step 6 — Demand Forecasting (Facility Averages)</h3>
-To produce stable per-facility estimates for service line planning:<br><br>
-&nbsp;&nbsp;&nbsp;&nbsp;1. <b>Rolling 6-month windows</b> with a 3-month step are created across the full date range.<br>
-&nbsp;&nbsp;&nbsp;&nbsp;2. Within each window, <b>unique patients per facility</b> are counted by their
-<b>most recent</b> assessment's tier.<br>
-&nbsp;&nbsp;&nbsp;&nbsp;3. Partial windows at the edges are dropped.<br>
-&nbsp;&nbsp;&nbsp;&nbsp;4. All metrics are <b>averaged across valid windows</b> to smooth out seasonal variation.<br><br>
-This gives a reliable "per facility, per 6-month period" estimate — the numbers shown in the Key Findings
-and Facility Summary sections above.
-</div>
-""", unsafe_allow_html=True)
-
-# --- Full scoring model in expander ---
-
-EVIDENCE_MAP = {
-    "pts_cognitive": {
-        "trigger": "BIMS 0–7 → 3 pts; BIMS 8–12 → 2 pts; if BIMS unavailable: C1000=3 → 3 pts, C1000=2 → 2 pts",
-        "reasoning": "Strongest predictor of dehydration in nursing homes. Impaired cognition reduces self-initiated drinking and recognition of thirst.",
-        "source": "Bunn et al. JAMDA 2019; Nagae et al. Nutrients 2020 (OR=6.29)",
-        "link": "https://pubmed.ncbi.nlm.nih.gov/30056949/",
-    },
-    "pts_dehydrated": {
-        "trigger": "J1550C = 1 (overrides tier → Already Dehydrated)",
-        "reasoning": "Patient already shows 2+ clinical signs of dehydration per RAI Manual. Not a risk factor — active dehydration.",
-        "source": "CMS MDS 3.0 RAI Manual v1.20.1, Section J",
-        "link": "https://www.cms.gov/medicare/quality/nursing-home-improvement/resident-assessment-instrument-manual",
-    },
-    "pts_comatose": {
-        "trigger": "B0100 = 1",
-        "reasoning": "Complete inability to self-hydrate. Total dependence on external fluid administration.",
-        "source": "Thomas DR et al. JAMDA 2008",
-        "link": "https://pubmed.ncbi.nlm.nih.gov/18294606/",
-    },
-    "pts_dysphagia": {
-        "trigger": "Any of K0100A/B/C/D = 1 (swallowing signs present)",
-        "reasoning": "Dysphagia directly impairs safe fluid consumption. Patients avoid drinking due to aspiration risk.",
-        "source": "Nagae et al. Nutrients 2020; CMS RAI Manual Section K",
-        "link": "https://pmc.ncbi.nlm.nih.gov/articles/PMC7709028/",
-    },
-    "pts_fever": {
-        "trigger": "J1550A = 1 (fever in 7-day look-back)",
-        "reasoning": "Fever causes insensible fluid losses through sweating and increased metabolic rate. Confirmed across multiple studies.",
-        "source": "Bunn et al. JAMDA 2019 (one of 2 consistently confirmed factors)",
-        "link": "https://pubmed.ncbi.nlm.nih.gov/30056949/",
-    },
-    "pts_vomiting": {
-        "trigger": "J1550B = 1",
-        "reasoning": "Direct, rapid fluid and electrolyte loss.",
-        "source": "Thomas DR et al. JAMDA 2008",
-        "link": "https://pubmed.ncbi.nlm.nih.gov/18294606/",
-    },
-    "pts_hospice": {
-        "trigger": "O0100K2 = 1 (receiving hospice)",
-        "reasoning": "End-of-life patients have declining intake and multiple co-morbidities compounding dehydration risk.",
-        "source": "Thomas DR et al. JAMDA 2008",
-        "link": "https://pubmed.ncbi.nlm.nih.gov/18294606/",
-    },
-    "pts_iv_parenteral": {
-        "trigger": "Any of K0520A1/A2/A3 = 1 (any care setting)",
-        "reasoning": "Presence of IV fluids indicates patient already cannot maintain adequate hydration orally.",
-        "source": "CMS RAI Manual Section K; CMS Hydration Pathway",
-        "link": "https://www.cms.gov/files/document/cms-20092-hydrationpdf",
-    },
-    "pts_caa_dehydration": {
-        "trigger": "V0200A14A = 1 (CMS CAA #14 triggered)",
-        "reasoning": "CMS's own algorithm flags this patient for dehydration assessment. Regulatory-level evidence of risk.",
-        "source": "CMS MDS 3.0 RAI Manual, Section V — CAA #14",
-        "link": "https://www.cms.gov/medicare/quality/nursing-home-improvement/resident-assessment-instrument-manual",
-    },
-    "pts_malnutrition": {
-        "trigger": "I5600 = 1",
-        "reasoning": "Malnutrition and dehydration are intertwined — food provides ~20% of daily water intake.",
-        "source": "Nagae et al. Nutrients 2020; CMS RAI Manual CAA #12/#14 linkage",
-        "link": "https://pmc.ncbi.nlm.nih.gov/articles/PMC7709028/",
-    },
-    "pts_diabetes": {
-        "trigger": "I0600 = 1",
-        "reasoning": "Osmotic diuresis from glucose causes increased urination and impaired kidney concentrating ability.",
-        "source": "Hooper et al. UK DRIE Study 2015 — 'consistently associated'",
-        "link": "https://pmc.ncbi.nlm.nih.gov/articles/PMC5018558/",
-    },
-    "pts_chf": {
-        "trigger": "I4000 = 1",
-        "reasoning": "CHF patients are on fluid restrictions and diuretics, creating paradoxical dehydration risk.",
-        "source": "Thomas DR et al. JAMDA 2008; CMS Hydration Pathway",
-        "link": "https://pubmed.ncbi.nlm.nih.gov/18294606/",
-    },
-    "pts_renal": {
-        "trigger": "I1500 = 1 (I1550 excluded — neurogenic bladder in recent MDS)",
-        "reasoning": "Impaired kidneys cannot concentrate urine, leading to excessive water loss. Strongest lab association in UK DRIE.",
-        "source": "Hooper et al. UK DRIE 2015 — strongest osmolality association",
-        "link": "https://pmc.ncbi.nlm.nih.gov/articles/PMC5018558/",
-    },
-    "pts_diuretics": {
-        "trigger": "N0415G1 = 1 (updated from N0400A which had 0% data)",
-        "reasoning": "Diuretics directly increase urine output, creating fluid deficit.",
-        "source": "Hooper et al. UK DRIE 2015; CMS Hydration Pathway",
-        "link": "https://pmc.ncbi.nlm.nih.gov/articles/PMC5018558/",
-    },
-    "pts_weight_loss": {
-        "trigger": "K0300 = 1 (5% in 30d) or 2 (10% in 180d)",
-        "reasoning": "Rapid weight loss includes fluid loss and indicates declining intake.",
-        "source": "CMS RAI Manual Section K; CMS Hydration Pathway",
-        "link": "https://www.cms.gov/files/document/cms-20092-hydrationpdf",
-    },
-    "pts_feeding_tube": {
-        "trigger": "Any of K0520B1/B2/B3 = 1 (any care setting)",
-        "reasoning": "Patient cannot meet nutritional/fluid needs orally. Requires precise fluid management.",
-        "source": "CMS RAI Manual Section K; Thomas DR JAMDA 2008",
-        "link": "https://www.cms.gov/medicare/quality/nursing-home-improvement/resident-assessment-instrument-manual",
-    },
-    "pts_adl_eating": {
-        "trigger": "G0110H1 = 3/4 (old MDS) OR GG0130A1 = 01/02/88 (new MDS) — coalesced",
-        "reasoning": "Patients who cannot feed themselves cannot self-hydrate. Old/new MDS codes coalesced.",
-        "source": "CMS Hydration Pathway — 'can resident reach, pour, and drink?'",
-        "link": "https://www.cms.gov/files/document/cms-20092-hydrationpdf",
-    },
-    "pts_delirium": {
-        "trigger": "Any of C1310A=1, C1310B/C/D = 1 or 2",
-        "reasoning": "Acute confusion prevents self-initiated fluid intake. Can be both cause and effect of dehydration.",
-        "source": "Thomas DR JAMDA 2008; CMS Hydration Pathway",
-        "link": "https://pubmed.ncbi.nlm.nih.gov/18294606/",
-    },
-    "pts_uti": {
-        "trigger": "I2300 = 1",
-        "reasoning": "UTIs cause fever and fluid loss. Dehydration also promotes UTIs (concentrated urine).",
-        "source": "Thomas DR JAMDA 2008",
-        "link": "https://pubmed.ncbi.nlm.nih.gov/18294606/",
-    },
-    "pts_antipsychotics": {
-        "trigger": "N0415A1 = 1",
-        "reasoning": "Cause sedation (reduced self-initiated drinking), dry mouth, and impaired thermoregulation.",
-        "source": "Thomas DR JAMDA 2008; Clinical review (VP Operations)",
-        "link": "https://pubmed.ncbi.nlm.nih.gov/18294606/",
-    },
-    "pts_caa_nutritional": {
-        "trigger": "V0200A12A = 1 (CMS CAA #12 triggered)",
-        "reasoning": "CMS links nutritional CAA #12 directly to dehydration CAA #14. Nutritional decline accompanies fluid decline.",
-        "source": "CMS MDS 3.0 RAI Manual, Section V — CAA #12",
-        "link": "https://www.cms.gov/medicare/quality/nursing-home-improvement/resident-assessment-instrument-manual",
-    },
-    "pts_incontinence_mod": {
-        "trigger": "H0300 = 3 (always incontinent)",
-        "reasoning": "Always-incontinent patients may restrict fluids to reduce episodes. Indicates severe functional decline.",
-        "source": "Hooper et al. UK DRIE 2015 — 'bladder incontinence sometimes associated'",
-        "link": "https://pmc.ncbi.nlm.nih.gov/articles/PMC5018558/",
-    },
-    "pts_female": {
-        "trigger": "A0800 = 2 (female)",
-        "reasoning": "Women have lower total body water percentage, making them more susceptible to fluid imbalances.",
-        "source": "Crea-Arsenio et al. PLOS ONE 2024 — 'women significantly more likely'",
-        "link": "https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0297588",
-    },
-    "pts_depression": {
-        "trigger": "PHQ-9 ≥ 10 (D0160 or D0600) or depression dx (I6000 = 1)",
-        "reasoning": "Depression reduces motivation for self-care including eating and drinking.",
-        "source": "Thomas DR JAMDA 2008; CMS Hydration Pathway",
-        "link": "https://pubmed.ncbi.nlm.nih.gov/18294606/",
-    },
-    "pts_pneumonia": {
-        "trigger": "I2000 = 1",
-        "reasoning": "Fever, tachypnea (respiratory water loss), and reduced oral intake.",
-        "source": "Thomas DR JAMDA 2008",
-        "link": "https://pubmed.ncbi.nlm.nih.gov/18294606/",
-    },
-    "pts_stroke": {
-        "trigger": "I4900 = 1",
-        "reasoning": "Stroke can cause dysphagia, cognitive impairment, and functional dependence — all independent risk factors.",
-        "source": "Thomas DR JAMDA 2008",
-        "link": "https://pubmed.ncbi.nlm.nih.gov/18294606/",
-    },
-    "pts_dental": {
-        "trigger": "L0200D = 1 (obvious dental problem)",
-        "reasoning": "Oral pain from broken/carious teeth reduces both food and fluid intake.",
-        "source": "CMS Hydration Pathway — 'poor oral health' as observation point",
-        "link": "https://www.cms.gov/files/document/cms-20092-hydrationpdf",
-    },
-    "pts_communication": {
-        "trigger": "B0700 = 2 or 3 (sometimes/rarely understood)",
-        "reasoning": "Patients who cannot make themselves understood are unable to request fluids or report thirst.",
-        "source": "CMS Hydration Pathway; Thomas DR JAMDA 2008",
-        "link": "https://www.cms.gov/files/document/cms-20092-hydrationpdf",
-    },
-    "pts_incontinence_low": {
-        "trigger": "H0300 = 1 (occasionally) or 2 (frequently incontinent)",
-        "reasoning": "Moderate incontinence contributes to fluid avoidance behavior.",
-        "source": "Hooper et al. UK DRIE 2015",
-        "link": "https://pmc.ncbi.nlm.nih.gov/articles/PMC5018558/",
-    },
-    "pts_dialysis": {
-        "trigger": "O0100J2 = 1",
-        "reasoning": "Dialysis patients have complex fluid balance with strict intake management and dehydration risk windows.",
-        "source": "Thomas DR JAMDA 2008",
-        "link": "https://pubmed.ncbi.nlm.nih.gov/18294606/",
-    },
-    "pts_dementia_dx": {
-        "trigger": "I5250 = 1 (Alzheimer's) or I5300 = 1 (other dementia)",
-        "reasoning": "Diagnosed dementia adds to cognitive impairment captured by BIMS — indicates progressive decline.",
-        "source": "Nagae et al. Nutrients 2020 — OR=6.29 (strongest predictor)",
-        "link": "https://pmc.ncbi.nlm.nih.gov/articles/PMC7709028/",
-    },
-    "pts_constipation": {
-        "trigger": "H0600 = 1",
-        "reasoning": "Both cause and effect of inadequate fluid intake. Insufficient hydration reduces bowel motility.",
-        "source": "Nagae et al. Nutrients 2020; Clinical review (VP Operations)",
-        "link": "https://pmc.ncbi.nlm.nih.gov/articles/PMC7709028/",
-    },
-    "pts_pressure_ulcer": {
-        "trigger": "M0210 = 1 (unhealed pressure ulcer)",
-        "reasoning": "Pressure ulcers cause insensible fluid loss through wound exudate. Dehydration impairs wound healing.",
-        "source": "Crea-Arsenio et al. PLOS ONE 2024",
-        "link": "https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0297588",
-    },
-}
-
-with st.expander("View complete scoring model — all 33 factors with MDS codes, triggers, and evidence"):
+with st.expander("Step 4 — Scoring: 33 risk factors checked per assessment, weighted 3 / 2 / 1 points"):
     st.markdown("""
-    Each row is one risk factor. **Trigger** = what condition must be true for points to fire.
-    **Why** = clinical reasoning. **Source** = peer-reviewed or CMS reference.
-    Click a link to view the source.
-    """)
+For **each individual assessment**, the algorithm checks 33 clinical risk factors from the MDS data.
+Each factor is a simple yes/no check against specific MDS item codes. If the condition is met,
+points are added to the assessment's total score:
 
-    model_rows = []
-    for col in pts_cols:
-        if col in FACTOR_META:
-            name, mds, pts, weight = FACTOR_META[col]
-        else:
-            name = col.replace("pts_", "").replace("_", " ").title()
-            mds, pts, weight = "—", "?", "low"
-        fired = (scores[col] > 0).sum()
-        pct = fired / n_assess * 100
-        ev = EVIDENCE_MAP.get(col, {})
-        model_rows.append({
-            "Factor": name,
-            "MDS Code": mds,
-            "Points": pts,
-            "Trigger": ev.get("trigger", "—"),
-            "Prevalence": f"{pct:.1f}%",
-            "Why": ev.get("reasoning", ""),
-            "Source": ev.get("source", ""),
-            "Link": ev.get("link", ""),
-            "_sort": int(pts) if pts.isdigit() else 3,
+- :red[**3 points**] — Severe / acute risk factors (e.g., comatose, fever, vomiting, already dehydrated, hospice, IV fluids, CAA dehydration trigger)
+- :orange[**2 points**] — Moderate / chronic risk factors (e.g., diabetes, CHF, renal failure, malnutrition, diuretics, delirium, feeding tube, weight loss)
+- :green[**1 point**] — Contributing risk factors (e.g., female sex, depression, pneumonia, stroke, dental problems, incontinence, pressure ulcers)
+
+**Special case — Cognitive Impairment:** Uses the RAI Manual's skip pattern. BIMS score (C0500) is checked
+first. If BIMS is unavailable (score = 99 or blank), Staff Assessment of cognition (C1000) is used instead.
+Severe impairment = 3 pts, moderate = 2 pts.
+
+**The total score is the sum of all points that fired.** Possible range: 0 to 35+.
+""")
+
+with st.expander("Step 5 — Risk Tier Classification: Low / Moderate / High / Already Dehydrated"):
+    st.markdown("""
+After scoring, each assessment is classified into a risk tier:
+
+| Rule | Tier | Action |
+|------|------|--------|
+| Score 0–5 | :green[**Low Risk**] | Standard hydration monitoring |
+| Score 6–10 | :orange[**Moderate Risk**] | Enhanced monitoring, proactive fluid offering |
+| Score 11+ | :red[**High Risk**] | Aggressive hydration protocol |
+| J1550C = 1 (overrides score) | :violet[**Already Dehydrated**] | Immediate intervention required |
+
+**Key:** J1550C is the MDS item for "Signs and Symptoms of Dehydration" — if checked, the patient
+has 2+ clinical dehydration indicators per the RAI Manual. This **overrides** the point-based tier
+because the patient is already experiencing dehydration regardless of their risk score.
+""")
+
+with st.expander("Step 6 — Demand Forecasting: rolling 6-month windows averaged across facilities"):
+    st.markdown("""
+To produce stable per-facility estimates for service line planning:
+
+1. **Rolling 6-month windows** with a 3-month step are created across the full date range.
+2. Within each window, **unique patients per facility** are counted by their **most recent** assessment's tier.
+3. Partial windows at the edges are dropped.
+4. All metrics are **averaged across valid windows** to smooth out seasonal variation.
+
+This gives a reliable "per facility, per 6-month period" estimate — the numbers shown in the
+Key Findings and Facility Summary sections above.
+""")
+
+# --- Full scoring model with evidence from Excel ---
+
+_EVIDENCE_DATA = [
+    {"Factor": "Cognitive Impairment (severe)", "MDS Code": "C0500 / C1000", "Points": 3, "Weight Tier": "High", "Trigger": "BIMS 0-7 \u2192 3 pts; if BIMS unavailable: C1000=3 \u2192 3 pts", "Prevalence": "60.2%", "Clinical Reasoning": "Cognitive impairment is the single strongest and most consistently confirmed predictor of dehydration in nursing home residents. Impaired cognition reduces self-initiated drinking, recognition of thirst, and ability to request fluids. The BIMS/C1000 skip pattern follows the RAI Manual\u2019s prescribed assessment logic.", "Primary Source": "Bunn et al. JAMDA 2019 \u2014 Systematic review of 49 risk factors; cognitive impairment was one of only two factors confirmed across multiple studies.", "Source Link": "https://pubmed.ncbi.nlm.nih.gov/30056949/", "Supporting Sources": "Nagae et al. Nutrients 2020 \u2014 Dementia OR=6.29 (strongest predictor); Hooper et al. UK DRIE Study 2015 \u2014 consistently associated with dehydration; CMS RAI Manual v1.20.1 \u2014 BIMS/C1000 skip pattern specification.", "Supporting Links": "https://pmc.ncbi.nlm.nih.gov/articles/PMC7709028/ | https://pmc.ncbi.nlm.nih.gov/articles/PMC5018558/"},
+    {"Factor": "Cognitive Impairment (moderate)", "MDS Code": "C0500 / C1000", "Points": 2, "Weight Tier": "Moderate", "Trigger": "BIMS 8-12 \u2192 2 pts; if BIMS unavailable: C1000=2 \u2192 2 pts", "Prevalence": "(included in 60.2% above)", "Clinical Reasoning": "Moderate cognitive impairment still impairs self-care and fluid intake behavior but to a lesser degree than severe impairment. Weighted at 2 pts to differentiate from severe (3 pts).", "Primary Source": "Same as severe cognitive impairment \u2014 Bunn et al. 2019, Nagae et al. 2020.", "Source Link": "https://pubmed.ncbi.nlm.nih.gov/30056949/", "Supporting Sources": "CMS RAI Manual v1.20.1 \u2014 C0500 scoring ranges.", "Supporting Links": "https://pmc.ncbi.nlm.nih.gov/articles/PMC7709028/"},
+    {"Factor": "Already Dehydrated", "MDS Code": "J1550C", "Points": 3, "Weight Tier": "High", "Trigger": "J1550C = 1 (also overrides tier to \u2018Already Dehydrated\u2019)", "Prevalence": "0.4%", "Clinical Reasoning": "J1550C indicates 2+ clinical signs of dehydration are already present per the RAI Manual. This is not a risk factor \u2014 it is active dehydration. The tier override ensures immediate clinical attention regardless of cumulative risk score.", "Primary Source": "CMS MDS 3.0 RAI Manual v1.20.1, Section J \u2014 Problem Conditions. J1550C is coded when the resident shows output exceeding intake AND one or more signs (dry mucous membranes, poor skin turgor, etc.).", "Source Link": "https://mdslearninghub.com/j1550c-problem-conditions-dehydrated-step-step", "Supporting Sources": "CMS Form CMS-20092, Hydration Critical Element Pathway \u2014 surveyors assess for these same clinical signs.", "Supporting Links": "https://www.cms.gov/files/document/cms-20092-hydrationpdf"},
+    {"Factor": "Comatose", "MDS Code": "B0100", "Points": 3, "Weight Tier": "High", "Trigger": "B0100 = 1", "Prevalence": "0.2%", "Clinical Reasoning": "A comatose patient cannot self-hydrate at all. Complete dependence on external fluid administration makes this an acute, critical risk factor.", "Primary Source": "Thomas DR et al. JAMDA 2008 \u2014 Clinical dehydration framework: inability to access fluids independently is a primary mechanism.", "Source Link": "https://www.sciencedirect.com/science/article/abs/pii/S1525861008001072", "Supporting Sources": "CMS Hydration Critical Element Pathway \u2014 assesses whether resident can \u2018reach, pour, and drink without assistance.\u2019", "Supporting Links": "https://www.cms.gov/files/document/cms-20092-hydrationpdf"},
+    {"Factor": "Swallowing Disorder", "MDS Code": "K0100A-D", "Points": 3, "Weight Tier": "High", "Trigger": "Any of K0100A, K0100B, K0100C, K0100D = 1", "Prevalence": "9.1%", "Clinical Reasoning": "Dysphagia directly impairs the ability to safely consume fluids. Patients with swallowing signs (loss of liquids, coughing/choking, complaints, holding food in mouth) avoid drinking due to aspiration risk, creating a direct pathway to dehydration.", "Primary Source": "Nagae et al. Nutrients 2020 \u2014 Dysphagia Severity Scale used as risk factor; low swallowing function assessed in nursing home dehydration study.", "Source Link": "https://pmc.ncbi.nlm.nih.gov/articles/PMC7709028/", "Supporting Sources": "CMS RAI Manual v1.20.1 Section K \u2014 links swallowing disorders directly to dehydration risk; Thomas DR JAMDA 2008 \u2014 oral/pharyngeal dysphagia listed as primary risk factor.", "Supporting Links": "https://www.sciencedirect.com/science/article/abs/pii/S1525861008001072"},
+    {"Factor": "Fever", "MDS Code": "J1550A", "Points": 3, "Weight Tier": "High", "Trigger": "J1550A = 1", "Prevalence": "0.3%", "Clinical Reasoning": "Fever causes insensible fluid losses through sweating and increased metabolic rate. It is one of only two risk factors (with cognitive impairment) confirmed across multiple studies in the Bunn systematic review.", "Primary Source": "Bunn et al. JAMDA 2019 \u2014 Systematic review: fever was one of only two factors consistently associated with dehydration across multiple studies.", "Source Link": "https://pubmed.ncbi.nlm.nih.gov/30056949/", "Supporting Sources": "Thomas DR JAMDA 2008 \u2014 fever listed under acute causes of dehydration; CMS Hydration Pathway \u2014 acute illness as risk factor.", "Supporting Links": "https://www.sciencedirect.com/science/article/abs/pii/S1525861008001072"},
+    {"Factor": "Vomiting", "MDS Code": "J1550B", "Points": 3, "Weight Tier": "High", "Trigger": "J1550B = 1", "Prevalence": "0.4%", "Clinical Reasoning": "Vomiting causes direct, rapid fluid and electrolyte loss. It is an acute mechanism of dehydration that compounds with any underlying chronic risk factors.", "Primary Source": "Thomas DR JAMDA 2008 \u2014 Vomiting listed as acute cause of \u2018salt and water loss dehydration\u2019 requiring immediate assessment.", "Source Link": "https://www.sciencedirect.com/science/article/abs/pii/S1525861008001072", "Supporting Sources": "CMS Hydration Critical Element Pathway \u2014 vomiting listed as condition requiring hydration assessment.", "Supporting Links": "https://www.cms.gov/files/document/cms-20092-hydrationpdf"},
+    {"Factor": "Hospice", "MDS Code": "O0100K2", "Points": 3, "Weight Tier": "High", "Trigger": "O0100K2 = 1", "Prevalence": "2.2%", "Clinical Reasoning": "Hospice patients are at end-of-life and frequently have reduced oral intake, declining functional status, and multiple co-morbidities that compound dehydration risk. Aggressive hydration decisions in hospice are complex clinical considerations.", "Primary Source": "Thomas DR JAMDA 2008 \u2014 End-of-life hydration decisions discussed as a distinct clinical scenario with high dehydration prevalence.", "Source Link": "https://www.sciencedirect.com/science/article/abs/pii/S1525861008001072", "Supporting Sources": "Clinical consensus \u2014 hospice patients routinely experience declining intake as part of the dying process.", "Supporting Links": ""},
+    {"Factor": "Parenteral / IV Fluids", "MDS Code": "K0520A1/A2/A3", "Points": 3, "Weight Tier": "High", "Trigger": "Any of K0520A1, K0520A2, K0520A3 = 1 (any care setting)", "Prevalence": "14.3%", "Clinical Reasoning": "The presence of IV/parenteral fluids indicates the patient already cannot maintain adequate hydration through oral intake alone. This is a marker of existing hydration failure, not just risk. All 3 care-setting columns are checked (in facility, on admission, since admission).", "Primary Source": "CMS RAI Manual v1.20.1, Section K \u2014 K0520A documents parenteral/IV feeding as a nutritional approach indicating inability to meet needs orally.", "Source Link": "https://www.cms.gov/medicare/quality/nursing-home-improvement/resident-assessment-instrument-manual", "Supporting Sources": "CMS Hydration Pathway \u2014 reviews physician orders for IV fluids as part of dehydration assessment.", "Supporting Links": "https://www.cms.gov/files/document/cms-20092-hydrationpdf"},
+    {"Factor": "CAA Dehydration Trigger", "MDS Code": "V0200A14A", "Points": 3, "Weight Tier": "High", "Trigger": "V0200A14A = 1 (CMS CAA #14 triggered)", "Prevalence": "22.8%", "Clinical Reasoning": "Care Area Assessment #14 is CMS\u2019s own algorithm built into the MDS that flags patients needing further dehydration assessment. If CMS\u2019s own system triggers a dehydration alert, this is strong evidence of elevated risk. Weighted at 3 pts because it represents CMS\u2019s regulatory determination.", "Primary Source": "CMS MDS 3.0 RAI Manual v1.20.1, Section V \u2014 Care Area Assessment (CAA) triggers. CAA #14 specifically addresses dehydration/fluid maintenance.", "Source Link": "https://www.cms.gov/medicare/quality/nursing-home-improvement/resident-assessment-instrument-manual", "Supporting Sources": "CMS Hydration Critical Element Pathway \u2014 directs surveyors to review CAA triggers.", "Supporting Links": "https://www.cms.gov/files/document/cms-20092-hydrationpdf"},
+    {"Factor": "Malnutrition", "MDS Code": "I5600", "Points": 2, "Weight Tier": "Moderate", "Trigger": "I5600 = 1", "Prevalence": "29.7%", "Clinical Reasoning": "Malnutrition and dehydration are closely intertwined \u2014 malnourished patients often have reduced food and fluid intake simultaneously. Food contributes ~20% of daily water intake, so poor nutrition compounds fluid deficits. Initially weighted at 3 pts, moved to 2 pts per VP Operations clinical review.", "Primary Source": "Nagae et al. Nutrients 2020 \u2014 Nutritional status (MNA-SF) assessed as risk factor for chronic dehydration; malnourished residents had higher dehydration prevalence.", "Source Link": "https://pmc.ncbi.nlm.nih.gov/articles/PMC7709028/", "Supporting Sources": "CMS RAI Manual Section V \u2014 CAA #12 (Nutritional Status) directly linked to dehydration CAA #14; Clinical review by S. Sklar, VP Operations \u2014 moved from 3\u21922 pts.", "Supporting Links": "https://www.cms.gov/medicare/quality/nursing-home-improvement/resident-assessment-instrument-manual"},
+    {"Factor": "Diabetes Mellitus", "MDS Code": "I0600", "Points": 2, "Weight Tier": "Moderate", "Trigger": "I0600 = 1", "Prevalence": "25.8%", "Clinical Reasoning": "Diabetes causes osmotic diuresis (glucose pulls water into urine), increased urination, and impaired kidney concentrating ability. It is consistently identified as a dehydration risk factor in nursing home studies.", "Primary Source": "Hooper et al. UK DRIE Study 2015 \u2014 Diabetes mellitus was \u2018consistently associated with hydration status\u2019 across analyses.", "Source Link": "https://pmc.ncbi.nlm.nih.gov/articles/PMC5018558/", "Supporting Sources": "Nagae et al. Nutrients 2020 \u2014 Diabetes assessed as comorbidity risk factor; Bunn et al. 2019 systematic review \u2014 diabetes identified in individual studies.", "Supporting Links": "https://pmc.ncbi.nlm.nih.gov/articles/PMC7709028/ | https://pubmed.ncbi.nlm.nih.gov/30056949/"},
+    {"Factor": "Heart Failure (CHF)", "MDS Code": "I4000", "Points": 2, "Weight Tier": "Moderate", "Trigger": "I4000 = 1", "Prevalence": "8.5%", "Clinical Reasoning": "CHF patients are frequently on fluid restrictions and diuretics, both of which create a paradoxical dehydration risk. Managing fluid balance in CHF is clinically complex \u2014 too much fluid worsens CHF, too little causes dehydration.", "Primary Source": "Thomas DR JAMDA 2008 \u2014 CHF listed as chronic condition complicating hydration management; diuretic use in CHF patients identified as indirect dehydration mechanism.", "Source Link": "https://www.sciencedirect.com/science/article/abs/pii/S1525861008001072", "Supporting Sources": "CMS Hydration Pathway \u2014 physician orders for fluid restrictions reviewed as part of assessment.", "Supporting Links": "https://www.cms.gov/files/document/cms-20092-hydrationpdf"},
+    {"Factor": "Renal Insufficiency", "MDS Code": "I1500", "Points": 2, "Weight Tier": "Moderate", "Trigger": "I1500 = 1 (I1550 excluded \u2014 neurogenic bladder in recent MDS)", "Prevalence": "31.0%", "Clinical Reasoning": "Impaired kidneys lose the ability to concentrate urine, leading to excessive water loss. Renal dysfunction was the most consistently associated factor with serum osmolality in the UK DRIE study. I1550 was excluded because it maps to neurogenic bladder in recent MDS versions, not renal failure.", "Primary Source": "Hooper et al. UK DRIE Study 2015 \u2014 \u2018Renal dysfunction was consistently associated with serum osmolality and odds of dehydration\u2019 \u2014 the strongest association in their analysis.", "Source Link": "https://pmc.ncbi.nlm.nih.gov/articles/PMC5018558/", "Supporting Sources": "Bunn et al. 2019 \u2014 renal impairment identified in systematic review; CMS RAI Manual \u2014 I1500 vs I1550 version change documented.", "Supporting Links": "https://pubmed.ncbi.nlm.nih.gov/30056949/"},
+    {"Factor": "Diuretics", "MDS Code": "N0415G1", "Points": 2, "Weight Tier": "Moderate", "Trigger": "N0415G1 = 1 (updated from N0400A which had 0% data)", "Prevalence": "16.9%", "Clinical Reasoning": "Diuretics directly increase urine output, creating fluid deficit. A well-established medication-related dehydration risk factor. The MDS code was corrected from N0400A (old version, 0% prevalence in our data) to N0415G1 (current version) during model validation.", "Primary Source": "Hooper et al. UK DRIE Study 2015 \u2014 \u2018Potassium-sparing diuretics sometimes associated with dehydration.\u2019", "Source Link": "https://pmc.ncbi.nlm.nih.gov/articles/PMC5018558/", "Supporting Sources": "Nagae et al. 2020 \u2014 diuretic use obtained from medical records as risk factor; CMS Hydration Pathway \u2014 medication review includes diuretics.", "Supporting Links": "https://pmc.ncbi.nlm.nih.gov/articles/PMC7709028/ | https://www.cms.gov/files/document/cms-20092-hydrationpdf"},
+    {"Factor": "Weight Loss", "MDS Code": "K0300", "Points": 2, "Weight Tier": "Moderate", "Trigger": "K0300 = 1 (5% in 30 days) or 2 (10% in 180 days)", "Prevalence": "7.6%", "Clinical Reasoning": "Significant weight loss indicates declining intake (both food and fluid) and/or wasting conditions. Water constitutes a large portion of body weight, so rapid weight loss often includes fluid loss.", "Primary Source": "CMS RAI Manual v1.20.1, Section K \u2014 K0300 weight loss is a clinical indicator directly linked to nutritional and hydration status assessment.", "Source Link": "https://www.cms.gov/medicare/quality/nursing-home-improvement/resident-assessment-instrument-manual", "Supporting Sources": "CMS Hydration Pathway \u2014 weight monitoring listed as part of hydration assessment; Nagae et al. 2020 \u2014 BMI/nutritional status linked to dehydration.", "Supporting Links": "https://www.cms.gov/files/document/cms-20092-hydrationpdf"},
+    {"Factor": "Feeding Tube", "MDS Code": "K0520B1/B2/B3", "Points": 2, "Weight Tier": "Moderate", "Trigger": "Any of K0520B1, K0520B2, K0520B3 = 1 (any care setting)", "Prevalence": "4.8%", "Clinical Reasoning": "Feeding tube presence indicates the patient cannot meet nutritional/fluid needs orally. While the tube itself delivers fluids, it signals severe functional impairment and dependence on precise fluid management. All 3 care-setting columns checked.", "Primary Source": "CMS RAI Manual v1.20.1, Section K \u2014 K0520B documents tube feeding as nutritional approach; CMS Hydration Pathway \u2014 tube feeding reviewed for adequacy of fluid delivery.", "Source Link": "https://www.cms.gov/medicare/quality/nursing-home-improvement/resident-assessment-instrument-manual", "Supporting Sources": "Thomas DR JAMDA 2008 \u2014 tube-fed patients require careful fluid balance monitoring.", "Supporting Links": "https://www.sciencedirect.com/science/article/abs/pii/S1525861008001072"},
+    {"Factor": "Eating ADL Dependence", "MDS Code": "G0110H1 / GG0130A1", "Points": 2, "Weight Tier": "Moderate", "Trigger": "G0110H1 = 3 or 4 (old MDS) OR GG0130A1 = 01, 02, 88 (new MDS) \u2014 coalesced", "Prevalence": "8.7%", "Clinical Reasoning": "Patients who cannot feed themselves independently also cannot self-hydrate. Dependence on staff for eating directly correlates with dependence for drinking. Old Section G and new Section GG codes are coalesced to handle the MDS version transition.", "Primary Source": "CMS Hydration Critical Element Pathway \u2014 specifically asks: can the resident \u2018reach, pour, and drink without assistance\u2019? Staff assistance with drinking is a core assessment element.", "Source Link": "https://www.cms.gov/files/document/cms-20092-hydrationpdf", "Supporting Sources": "Nagae et al. 2020 \u2014 ADL (Barthel Index) assessed; lower ADL scores associated with risk; CMS RAI Manual \u2014 G0110H1 to GG0130A1 transition documented.", "Supporting Links": "https://pmc.ncbi.nlm.nih.gov/articles/PMC7709028/"},
+    {"Factor": "Delirium Signs", "MDS Code": "C1310A-D", "Points": 2, "Weight Tier": "Moderate", "Trigger": "Any of C1310A=1, C1310B=1/2, C1310C=1/2, C1310D=1/2", "Prevalence": "14.7%", "Clinical Reasoning": "Delirium causes acute confusion, inattention, and altered consciousness \u2014 all of which prevent self-initiated fluid intake. Delirium can also be both a cause and consequence of dehydration, creating a dangerous feedback loop.", "Primary Source": "Thomas DR JAMDA 2008 \u2014 Confusion and altered mental status listed as both risk factor and clinical sign of dehydration.", "Source Link": "https://www.sciencedirect.com/science/article/abs/pii/S1525861008001072", "Supporting Sources": "CMS Hydration Pathway \u2014 confusion listed as sign of altered hydration status; Bunn et al. 2019 \u2014 cognitive status broadly confirmed.", "Supporting Links": "https://www.cms.gov/files/document/cms-20092-hydrationpdf"},
+    {"Factor": "UTI", "MDS Code": "I2300", "Points": 2, "Weight Tier": "Moderate", "Trigger": "I2300 = 1", "Prevalence": "3.6%", "Clinical Reasoning": "UTIs cause fever, increased fluid loss, and reduced intake due to malaise. UTIs are also more common in dehydrated patients (concentrated urine promotes bacterial growth), creating a bidirectional risk.", "Primary Source": "Thomas DR JAMDA 2008 \u2014 Infections including UTI listed as acute causes of dehydration through fever and reduced intake.", "Source Link": "https://www.sciencedirect.com/science/article/abs/pii/S1525861008001072", "Supporting Sources": "Clinical consensus \u2014 adequate hydration is a primary UTI prevention strategy in nursing homes.", "Supporting Links": ""},
+    {"Factor": "Antipsychotics", "MDS Code": "N0415A1", "Points": 2, "Weight Tier": "Moderate", "Trigger": "N0415A1 = 1", "Prevalence": "11.3%", "Clinical Reasoning": "Antipsychotic medications cause sedation (reducing self-initiated drinking), dry mouth, and can impair swallowing. They also affect thermoregulation, increasing insensible fluid losses. Added per VP Operations clinical review.", "Primary Source": "Thomas DR JAMDA 2008 \u2014 Medications that cause sedation or dry mouth identified as dehydration risk factors.", "Source Link": "https://www.sciencedirect.com/science/article/abs/pii/S1525861008001072", "Supporting Sources": "Added per clinical review by S. Sklar, VP Operations \u2014 identified as commonly prescribed medication with dehydration side effects.", "Supporting Links": ""},
+    {"Factor": "CAA Nutritional Trigger", "MDS Code": "V0200A12A", "Points": 2, "Weight Tier": "Moderate", "Trigger": "V0200A12A = 1 (CMS CAA #12 triggered)", "Prevalence": "51.6%", "Clinical Reasoning": "CMS CAA #12 flags patients needing nutritional status assessment. Nutrition and hydration are clinically intertwined \u2014 food provides ~20% of daily water intake, and nutritional decline typically accompanies fluid intake decline.", "Primary Source": "CMS MDS 3.0 RAI Manual v1.20.1, Section V \u2014 CAA #12 (Nutritional Status) is explicitly linked to CAA #14 (Dehydration) in the RAI Manual\u2019s care area assessment guidance.", "Source Link": "https://www.cms.gov/medicare/quality/nursing-home-improvement/resident-assessment-instrument-manual", "Supporting Sources": "CMS Hydration Pathway \u2014 nutritional status review is part of dehydration assessment.", "Supporting Links": "https://www.cms.gov/files/document/cms-20092-hydrationpdf"},
+    {"Factor": "Always Incontinent", "MDS Code": "H0300 = 3", "Points": 2, "Weight Tier": "Moderate", "Trigger": "H0300 = 3 (always incontinent)", "Prevalence": "35.9%", "Clinical Reasoning": "Always-incontinent patients may voluntarily restrict fluid intake to reduce incontinence episodes (fluid avoidance behavior). Severe incontinence also indicates functional decline correlating with inability to self-hydrate.", "Primary Source": "Hooper et al. UK DRIE Study 2015 \u2014 \u2018Bladder incontinence sometimes associated with dehydration.\u2019", "Source Link": "https://pmc.ncbi.nlm.nih.gov/articles/PMC5018558/", "Supporting Sources": "CMS RAI Manual \u2014 H0300 coding: 0=continent, 1=occasionally, 2=frequently, 3=always, 9=not rated. Clinical review by S. Sklar \u2014 H0300=3 elevated from 1 pt to 2 pts.", "Supporting Links": ""},
+    {"Factor": "Female Sex", "MDS Code": "A0800", "Points": 1, "Weight Tier": "Low", "Trigger": "A0800 = 2", "Prevalence": "50.9%", "Clinical Reasoning": "Women have lower total body water percentage due to higher body fat ratio, making them more susceptible to fluid imbalances.", "Primary Source": "Crea-Arsenio et al. PLOS ONE 2024 \u2014 \u2018Women were significantly more likely to exhibit symptoms of dehydration compared to men.\u2019", "Source Link": "https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0297588", "Supporting Sources": "Hooper et al. UK DRIE 2015 \u2014 sex \u2018sometimes associated\u2019 with dehydration status.", "Supporting Links": "https://pmc.ncbi.nlm.nih.gov/articles/PMC5018558/"},
+    {"Factor": "Depression", "MDS Code": "D0160 / D0600 / I6000", "Points": 1, "Weight Tier": "Low", "Trigger": "PHQ-9 resident (D0160) \u2265 10 OR PHQ-9 staff (D0600) \u2265 10 OR depression dx (I6000) = 1", "Prevalence": "28.3%", "Clinical Reasoning": "Depression reduces motivation for self-care including eating and drinking. Depressed residents may refuse meals and fluids.", "Primary Source": "Thomas DR JAMDA 2008 \u2014 Depression and reduced motivation for self-care identified as contributing factors to inadequate fluid intake.", "Source Link": "https://www.sciencedirect.com/science/article/abs/pii/S1525861008001072", "Supporting Sources": "CMS Hydration Pathway \u2014 behavioral factors affecting fluid intake assessed by surveyors.", "Supporting Links": "https://www.cms.gov/files/document/cms-20092-hydrationpdf"},
+    {"Factor": "Pneumonia", "MDS Code": "I2000", "Points": 1, "Weight Tier": "Low", "Trigger": "I2000 = 1", "Prevalence": "2.0%", "Clinical Reasoning": "Pneumonia causes fever (insensible losses), tachypnea (respiratory water loss), reduced oral intake due to malaise, and dysphagia risk from respiratory compromise.", "Primary Source": "Thomas DR JAMDA 2008 \u2014 Acute infections including pneumonia cause dehydration through fever and reduced intake.", "Source Link": "https://www.sciencedirect.com/science/article/abs/pii/S1525861008001072", "Supporting Sources": "Clinical consensus \u2014 pneumonia management guidelines emphasize adequate hydration.", "Supporting Links": ""},
+    {"Factor": "Stroke / CVA", "MDS Code": "I4900", "Points": 1, "Weight Tier": "Low", "Trigger": "I4900 = 1", "Prevalence": "8.2%", "Clinical Reasoning": "Stroke can cause dysphagia, cognitive impairment, and functional dependence \u2014 all independent dehydration risk factors. Weighted at 1 pt because its effects are captured indirectly through the specific impairments it causes (which score separately).", "Primary Source": "Thomas DR JAMDA 2008 \u2014 Neurological conditions causing functional impairment listed as dehydration risk factors.", "Source Link": "https://www.sciencedirect.com/science/article/abs/pii/S1525861008001072", "Supporting Sources": "Clinical consensus \u2014 post-stroke dysphagia screening is standard of care precisely because of aspiration and dehydration risk.", "Supporting Links": ""},
+    {"Factor": "Dental Problem", "MDS Code": "L0200D", "Points": 1, "Weight Tier": "Low", "Trigger": "L0200D = 1", "Prevalence": "3.5%", "Clinical Reasoning": "Dental problems (broken, loose, or carious teeth, inflamed gums) cause oral pain that reduces both food and fluid intake.", "Primary Source": "CMS Hydration Critical Element Pathway (CMS-20092) \u2014 \u2018Poor oral health and dental problems\u2019 listed as sign indicating altered hydration status.", "Source Link": "https://www.cms.gov/files/document/cms-20092-hydrationpdf", "Supporting Sources": "CMS RAI Manual Section L \u2014 oral/dental status assessment.", "Supporting Links": "https://www.cms.gov/medicare/quality/nursing-home-improvement/resident-assessment-instrument-manual"},
+    {"Factor": "Communication Impairment", "MDS Code": "B0700", "Points": 1, "Weight Tier": "Low", "Trigger": "B0700 = 2 or 3 (sometimes/rarely understood)", "Prevalence": "16.4%", "Clinical Reasoning": "Patients who cannot make themselves understood are unable to request fluids, report thirst, or communicate discomfort from dehydration.", "Primary Source": "CMS Hydration Critical Element Pathway \u2014 assesses whether staff can identify and respond to resident\u2019s fluid needs, which requires communication.", "Source Link": "https://www.cms.gov/files/document/cms-20092-hydrationpdf", "Supporting Sources": "Thomas DR JAMDA 2008 \u2014 inability to communicate needs as a mechanism for inadequate intake.", "Supporting Links": "https://www.sciencedirect.com/science/article/abs/pii/S1525861008001072"},
+    {"Factor": "Occasionally / Frequently Incontinent", "MDS Code": "H0300 = 1, 2", "Points": 1, "Weight Tier": "Low", "Trigger": "H0300 = 1 (occasionally) or 2 (frequently incontinent)", "Prevalence": "47.2%", "Clinical Reasoning": "Moderate incontinence contributes to fluid avoidance behavior but to a lesser degree than always-incontinent (2 pts). Weighted at 1 pt as a contributing rather than primary risk factor.", "Primary Source": "Hooper et al. UK DRIE Study 2015 \u2014 Bladder incontinence associated with dehydration status.", "Source Link": "https://pmc.ncbi.nlm.nih.gov/articles/PMC5018558/", "Supporting Sources": "CMS RAI Manual \u2014 H0300 coding values; Clinical review \u2014 separated from always-incontinent per MDS coding.", "Supporting Links": ""},
+    {"Factor": "Dialysis", "MDS Code": "O0100J2", "Points": 1, "Weight Tier": "Low", "Trigger": "O0100J2 = 1", "Prevalence": "0.7%", "Clinical Reasoning": "Dialysis patients have complex fluid balance needs with strict intake management. While dialysis removes excess fluid, the inter-dialytic period and fluid restrictions create dehydration risk windows.", "Primary Source": "Thomas DR JAMDA 2008 \u2014 Renal conditions and their treatments discussed as dehydration risk factors.", "Source Link": "https://www.sciencedirect.com/science/article/abs/pii/S1525861008001072", "Supporting Sources": "CMS RAI Manual Section O \u2014 special treatments including dialysis.", "Supporting Links": ""},
+    {"Factor": "Alzheimer's / Dementia Dx", "MDS Code": "I5250 / I5300", "Points": 1, "Weight Tier": "Low", "Trigger": "I5250 = 1 (Alzheimer\u2019s) or I5300 = 1 (other dementia)", "Prevalence": "38.0%", "Clinical Reasoning": "Dementia diagnosis adds 1 pt as a contributing factor. The primary cognitive impairment effect is already captured through BIMS/C1000 scoring (2-3 pts). This additional point captures the diagnosed condition itself, which may indicate progressive decline beyond what a single cognitive assessment shows.", "Primary Source": "Nagae et al. Nutrients 2020 \u2014 Dementia diagnosis (DSM-V criteria) had OR=6.29 for chronic dehydration \u2014 the strongest single predictor in their study.", "Source Link": "https://pmc.ncbi.nlm.nih.gov/articles/PMC7709028/", "Supporting Sources": "Bunn et al. 2019 \u2014 cognitive impairment consistently confirmed; scored separately from BIMS to capture diagnosed progressive conditions.", "Supporting Links": "https://pubmed.ncbi.nlm.nih.gov/30056949/"},
+    {"Factor": "Constipation", "MDS Code": "H0600", "Points": 1, "Weight Tier": "Low", "Trigger": "H0600 = 1", "Prevalence": "21.7%", "Clinical Reasoning": "Constipation is both a cause and effect of inadequate fluid intake. Insufficient hydration reduces bowel motility; constipation can reduce appetite and willingness to eat/drink.", "Primary Source": "Nagae et al. Nutrients 2020 \u2014 \u2018Constipation was assessed based on the resident\u2019s complaint or use of laxatives\u2019 as a factor in the dehydration risk analysis.", "Source Link": "https://pmc.ncbi.nlm.nih.gov/articles/PMC7709028/", "Supporting Sources": "Added per clinical review by S. Sklar, VP Operations.", "Supporting Links": ""},
+    {"Factor": "Pressure Ulcers Present", "MDS Code": "M0210", "Points": 1, "Weight Tier": "Low", "Trigger": "M0210 = 1 (unhealed pressure ulcer present)", "Prevalence": "11.6%", "Clinical Reasoning": "Pressure ulcers cause insensible fluid loss through wound exudate and increase metabolic fluid requirements for healing. Dehydration also impairs wound healing, creating a negative cycle.", "Primary Source": "Crea-Arsenio et al. PLOS ONE 2024 \u2014 Studied \u2018Factors associated with pressure ulcer and dehydration in long-term care settings\u2019 \u2014 found both conditions co-occur and share risk factors.", "Source Link": "https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0297588", "Supporting Sources": "Added per clinical review by S. Sklar, VP Operations \u2014 identified pressure ulcers as a missing risk factor in the initial model.", "Supporting Links": ""},
+]
+
+with st.expander("View complete scoring model \u2014 all 33 factors with MDS codes, triggers, and evidence"):
+    st.markdown("Each row is one risk factor. Scroll right to see all columns. All cells wrap text so full content is visible.")
+
+    _ev_df = pd.DataFrame(_EVIDENCE_DATA)
+
+    _tier_colors = {"High": "#FDF2F2", "Moderate": "#FFF8E1", "Low": "#F0FDF4"}
+
+    def _bg_tier(row):
+        bg = _tier_colors.get(row["Weight Tier"], "")
+        return [f"background-color: {bg}" if bg else "" for _ in row]
+
+    _styled = (
+        _ev_df.style
+        .apply(_bg_tier, axis=1)
+        .set_properties(**{
+            "white-space": "pre-wrap",
+            "word-wrap": "break-word",
+            "max-width": "300px",
+            "font-size": "0.82rem",
+            "vertical-align": "top",
         })
-    model_df = (pd.DataFrame(model_rows)
-                .sort_values("_sort", ascending=False)
-                .drop(columns=["_sort"]))
-    st.dataframe(model_df, width="stretch", hide_index=True, height=700,
-                 column_config={
-                     "Link": st.column_config.LinkColumn("Link", display_text="View"),
-                 })
+        .set_properties(subset=["Factor", "MDS Code", "Points", "Weight Tier", "Prevalence"], **{
+            "max-width": "120px",
+        })
+    )
+
+    st.dataframe(
+        _styled,
+        column_config={
+            "Source Link": st.column_config.LinkColumn("Source Link", display_text="Open"),
+            "Supporting Links": st.column_config.TextColumn("More Links", width="large"),
+            "Factor": st.column_config.TextColumn("Factor", width="medium"),
+            "MDS Code": st.column_config.TextColumn("MDS Code", width="small"),
+            "Points": st.column_config.NumberColumn("Pts", width="small"),
+            "Weight Tier": st.column_config.TextColumn("Tier", width="small"),
+            "Trigger": st.column_config.TextColumn("Trigger", width="large"),
+            "Prevalence": st.column_config.TextColumn("Prev.", width="small"),
+            "Clinical Reasoning": st.column_config.TextColumn("Clinical Reasoning", width="large"),
+            "Primary Source": st.column_config.TextColumn("Primary Source", width="large"),
+            "Supporting Sources": st.column_config.TextColumn("Supporting Sources", width="large"),
+        },
+        hide_index=True,
+        height=800,
+        use_container_width=True,
+    )
 
 st.markdown("---")
 
