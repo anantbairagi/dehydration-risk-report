@@ -699,50 +699,72 @@ _EVIDENCE_DATA = [
 ]
 
 with st.expander("View complete scoring model \u2014 all 33 factors with MDS codes, triggers, and evidence"):
-    st.markdown("Each row is one risk factor. Scroll right to see all columns. All cells wrap text so full content is visible.")
+    st.markdown("Each row is one risk factor. All cells wrap text so full content is visible. Links are clickable.")
 
-    _ev_df = pd.DataFrame(_EVIDENCE_DATA)
+    _tier_bg = {"High": "#FDF2F2", "Moderate": "#FFF8E1", "Low": "#F0FDF4"}
 
-    _tier_colors = {"High": "#FDF2F2", "Moderate": "#FFF8E1", "Low": "#F0FDF4"}
+    def _make_link(url):
+        if not url or url != url:
+            return ""
+        urls = [u.strip() for u in str(url).split("|") if u.strip()]
+        return "<br>".join(
+            f'<a href="{u}" target="_blank" style="color:#0563C1;word-break:break-all;">{u}</a>'
+            for u in urls
+        )
 
-    def _bg_tier(row):
-        bg = _tier_colors.get(row["Weight Tier"], "")
-        return [f"background-color: {bg}" if bg else "" for _ in row]
+    _html_rows = []
+    for r in _EVIDENCE_DATA:
+        bg = _tier_bg.get(r["Weight Tier"], "#fff")
+        _html_rows.append(
+            f'<tr style="background:{bg};">'
+            f'<td><b>{r["Factor"]}</b></td>'
+            f'<td>{r["MDS Code"]}</td>'
+            f'<td style="text-align:center;">{r["Points"]}</td>'
+            f'<td>{r["Weight Tier"]}</td>'
+            f'<td>{r["Trigger"]}</td>'
+            f'<td style="text-align:center;">{r["Prevalence"]}</td>'
+            f'<td>{r["Clinical Reasoning"]}</td>'
+            f'<td>{r["Primary Source"]}</td>'
+            f'<td>{_make_link(r["Source Link"])}</td>'
+            f'<td>{r["Supporting Sources"]}</td>'
+            f'<td>{_make_link(r["Supporting Links"])}</td>'
+            f'</tr>'
+        )
 
-    _styled = (
-        _ev_df.style
-        .apply(_bg_tier, axis=1)
-        .set_properties(**{
-            "white-space": "pre-wrap",
-            "word-wrap": "break-word",
-            "max-width": "300px",
-            "font-size": "0.82rem",
-            "vertical-align": "top",
-        })
-        .set_properties(subset=["Factor", "MDS Code", "Points", "Weight Tier", "Prevalence"], **{
-            "max-width": "120px",
-        })
-    )
-
-    st.dataframe(
-        _styled,
-        column_config={
-            "Source Link": st.column_config.LinkColumn("Source Link", display_text="Open"),
-            "Supporting Links": st.column_config.TextColumn("More Links", width="large"),
-            "Factor": st.column_config.TextColumn("Factor", width="medium"),
-            "MDS Code": st.column_config.TextColumn("MDS Code", width="small"),
-            "Points": st.column_config.NumberColumn("Pts", width="small"),
-            "Weight Tier": st.column_config.TextColumn("Tier", width="small"),
-            "Trigger": st.column_config.TextColumn("Trigger", width="large"),
-            "Prevalence": st.column_config.TextColumn("Prev.", width="small"),
-            "Clinical Reasoning": st.column_config.TextColumn("Clinical Reasoning", width="large"),
-            "Primary Source": st.column_config.TextColumn("Primary Source", width="large"),
-            "Supporting Sources": st.column_config.TextColumn("Supporting Sources", width="large"),
-        },
-        hide_index=True,
-        height=800,
-        use_container_width=True,
-    )
+    _table_html = f"""
+    <div style="max-height:800px; overflow:auto; border:1px solid #e0e0e0; border-radius:6px;">
+    <table style="border-collapse:collapse; width:100%; font-size:0.8rem; line-height:1.4;">
+    <thead>
+    <tr style="background:#2C3E50; color:white; position:sticky; top:0; z-index:1;">
+        <th style="padding:8px 6px; text-align:left; min-width:140px;">Factor</th>
+        <th style="padding:8px 6px; text-align:left; min-width:90px;">MDS Code</th>
+        <th style="padding:8px 6px; text-align:center; min-width:30px;">Pts</th>
+        <th style="padding:8px 6px; text-align:left; min-width:65px;">Tier</th>
+        <th style="padding:8px 6px; text-align:left; min-width:180px;">Trigger</th>
+        <th style="padding:8px 6px; text-align:center; min-width:50px;">Prev.</th>
+        <th style="padding:8px 6px; text-align:left; min-width:220px;">Clinical Reasoning</th>
+        <th style="padding:8px 6px; text-align:left; min-width:200px;">Primary Source</th>
+        <th style="padding:8px 6px; text-align:left; min-width:160px;">Source Link</th>
+        <th style="padding:8px 6px; text-align:left; min-width:200px;">Supporting Sources</th>
+        <th style="padding:8px 6px; text-align:left; min-width:160px;">More Links</th>
+    </tr>
+    </thead>
+    <tbody>
+    {"".join(_html_rows)}
+    </tbody>
+    </table>
+    </div>
+    <style>
+    div[data-testid="stExpander"] table td {{
+        padding: 6px;
+        vertical-align: top;
+        border-bottom: 1px solid #e9ecef;
+        word-wrap: break-word;
+        white-space: normal;
+    }}
+    </style>
+    """
+    st.markdown(_table_html, unsafe_allow_html=True)
 
 st.markdown("---")
 
