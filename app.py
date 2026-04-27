@@ -1,7 +1,8 @@
 """Dehydration Risk Stratification v2 — Stakeholder Report.
 
 Launch:  streamlit run app.py
-Reads:   dehydration_data.db  (SQLite, produced by extract_to_sqlite.py)
+Reads:   VDP Postgres (Fly.io, requires fly proxy 16380:5432 running)
+         Connects via DATABASE_URL in .env (see .env.example).
 """
 
 import streamlit as st
@@ -9,7 +10,7 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
-import sqlite3
+import db
 from pathlib import Path
 
 st.set_page_config(
@@ -271,16 +272,148 @@ def build_facility_summary(df: pd.DataFrame) -> pd.DataFrame:
 
 # ─── Data loading & caching ──────────────────────────────────────────────────
 
-@st.cache_data
-def load_and_score():
-    db_path = Path(__file__).parent / "dehydration_data.db"
-    if not db_path.exists():
-        st.error(f"Database not found at `{db_path}`. Run `extract_to_sqlite.py` first.")
-        st.stop()
+# SQL query: extract all MDS item codes used by the scoring model from deid_json.
+# assessment_type_obra is stored as decoded strings like "01 (Admission)" in VDP;
+# we filter by the leading 2-char code and also expose the raw code for display.
+_LOAD_QUERY = """
+SELECT
+    ma.mds_pid                                           AS surrogate_patient_id,
+    COALESCE(ma.pid, ma.mds_pid)                         AS surrogate_patient_id_matched,
+    ma.fid                                               AS surrogate_facility_id,
+    ma.cid,
+    ma.assessment_reference_date,
+    LEFT(ma.assessment_type_obra, 2)                     AS assessment_type_obra,
+    ma.deid_json->>'ITM_SET_VRSN_CD'                     AS item_set_version,
 
-    conn = sqlite3.connect(str(db_path))
-    df = pd.read_sql("SELECT * FROM assessments", conn)
-    conn.close()
+    -- Section A
+    ma.deid_json->>'A0800'                               AS a0800,
+
+    -- Section B
+    ma.deid_json->>'B0100'                               AS b0100,
+    ma.deid_json->>'B0700'                               AS b0700,
+
+    -- Section C
+    ma.deid_json->>'C0100'                               AS c0100,
+    ma.deid_json->>'C0500'                               AS c0500,
+    ma.deid_json->>'C1000'                               AS c1000,
+    ma.deid_json->>'C1310A'                              AS c1310a,
+    ma.deid_json->>'C1310B'                              AS c1310b,
+    ma.deid_json->>'C1310C'                              AS c1310c,
+    ma.deid_json->>'C1310D'                              AS c1310d,
+
+    -- Section D
+    ma.deid_json->>'D0160'                               AS d0160,
+    ma.deid_json->>'D0600'                               AS d0600,
+
+    -- Section G (old eating ADL)
+    ma.deid_json->>'G0110H1'                             AS g0110h1,
+
+    -- Section GG (new eating ADL)
+    ma.deid_json->>'GG0130A1'                            AS gg0130a1,
+
+    -- Section H
+    ma.deid_json->>'H0300'                               AS h0300,
+    ma.deid_json->>'H0600'                               AS h0600,
+
+    -- Section I
+    ma.deid_json->>'I0600'                               AS i0600,
+    ma.deid_json->>'I1500'                               AS i1500,
+    ma.deid_json->>'I2000'                               AS i2000,
+    ma.deid_json->>'I2300'                               AS i2300,
+    ma.deid_json->>'I4000'                               AS i4000,
+    ma.deid_json->>'I4900'                               AS i4900,
+    ma.deid_json->>'I5250'                               AS i5250,
+    ma.deid_json->>'I5300'                               AS i5300,
+    ma.deid_json->>'I5600'                               AS i5600,
+    ma.deid_json->>'I6000'                               AS i6000,
+
+    -- Section J
+    ma.deid_json->>'J1550A'                              AS j1550a,
+    ma.deid_json->>'J1550B'                              AS j1550b,
+    ma.deid_json->>'J1550C'                              AS j1550c,
+
+    -- Section K
+    ma.deid_json->>'K0100A'                              AS k0100a,
+    ma.deid_json->>'K0100B'                              AS k0100b,
+    ma.deid_json->>'K0100C'                              AS k0100c,
+    ma.deid_json->>'K0100D'                              AS k0100d,
+    ma.deid_json->>'K0300'                               AS k0300,
+    ma.deid_json->>'K0520A1'                             AS k0520a1,
+    ma.deid_json->>'K0520A2'                             AS k0520a2,
+    ma.deid_json->>'K0520A3'                             AS k0520a3,
+    ma.deid_json->>'K0520B1'                             AS k0520b1,
+    ma.deid_json->>'K0520B2'                             AS k0520b2,
+    ma.deid_json->>'K0520B3'                             AS k0520b3,
+
+    -- Section L
+    ma.deid_json->>'L0200D'                              AS l0200d,
+
+    -- Section M
+    ma.deid_json->>'M0210'                               AS m0210,
+
+    -- Section N
+    ma.deid_json->>'N0415A1'                             AS n0415a1,
+    ma.deid_json->>'N0415G1'                             AS n0415g1,
+
+    -- Section O
+    ma.deid_json->>'O0100J2'                             AS o0100j2,
+    ma.deid_json->>'O0100K2'                             AS o0100k2,
+
+    -- Section V (CAA triggers)
+    ma.deid_json->>'V0200A12A'                           AS v0200a12a,
+    ma.deid_json->>'V0200A14A'                           AS v0200a14a
+
+FROM app.mds_assessments ma
+WHERE LEFT(ma.assessment_type_obra, 2) IN ('01', '02', '03', '04')
+  AND ma.assessment_reference_date >= '2022-01-01'
+  AND ma.fid IS NOT NULL
+"""
+
+
+_SNAPSHOT_PATH = Path(__file__).parent / "dehydration_snapshot.parquet"
+
+
+@st.cache_data(ttl=300)
+def load_and_score():
+    """Load OBRA assessments, score, and summarise.
+
+    Data source priority:
+      1. Live VDP Postgres  — when DATABASE_URL is set in .env (local dev with tunnel)
+      2. dehydration_snapshot.parquet — static snapshot for Streamlit Community Cloud
+    """
+    import os
+
+    use_live = bool(os.getenv("DATABASE_URL", ""))
+
+    if use_live:
+        try:
+            conn = db.get_connection()
+        except RuntimeError as exc:
+            st.error(str(exc))
+            st.stop()
+        except Exception as exc:
+            st.error(
+                f"Could not connect to VDP Postgres. "
+                f"Is the Fly tunnel running on port 16380?\n\n`{exc}`"
+            )
+            st.stop()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(_LOAD_QUERY)
+                cols = [desc[0] for desc in cur.description]
+                df = pd.DataFrame(cur.fetchall(), columns=cols)
+        finally:
+            conn.close()
+    else:
+        if not _SNAPSHOT_PATH.exists():
+            st.error(
+                f"`{_SNAPSHOT_PATH.name}` not found and `DATABASE_URL` is not set. "
+                f"Either:\n"
+                f"- Run `python export_snapshot.py` (with Fly tunnel) to generate a snapshot, or\n"
+                f"- Create a `.env` file with `DATABASE_URL` for live data."
+            )
+            st.stop()
+        df = pd.read_parquet(_SNAPSHOT_PATH)
 
     df = score_assessments(df)
     summary = build_facility_summary(df)

@@ -1,3 +1,6 @@
 __pycache__/
 *.pyc
 .streamlit/
+.env
+dehydration_data.db
+
